@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Take Attendance - Attendance System</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        #verification-progress {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            margin: 15px 0;
+            overflow: hidden;
+        }
+
+        #progress-bar {
+            height: 100%;
+            width: 0;
+            background-color: #4CAF50;
+            transition: width 0.5s;
+        }
+
+        .welcome-message {
+            font-size: 24px;
+            color: #4CAF50;
+            display: none;
+            animation: fadeIn 1s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Attendance System</h1>
+        
+        <button id="back-btn" class="back-btn">← Back to Home</button>
+        
+        <div class="status-container">
+            <p id="status-message" class="status-message">Initializing camera...</p>
+            <div id="verification-progress">
+                <div id="progress-bar"></div>
+            </div>
+        </div>
+        
+        <div class="video-container">
+            <video id="video" width="640" height="480" autoplay></video>
+            <canvas id="canvas" width="640" height="480" style="display: none;"></canvas>
+        </div>
+        
+        <div class="recognition-result">
+            <h2 id="recognized-user" class="welcome-message"></h2>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const backBtn = document.getElementById('back-btn');
+            const statusMessage = document.getElementById('status-message');
+            const progressBar = document.getElementById('progress-bar');
+            const videoEl = document.getElementById('video');
+            const canvasEl = document.getElementById('canvas');
+            const recognizedUser = document.getElementById('recognized-user');
+            
+            let captureCount = 0;
+            const totalCaptures = 5;
+            let captureTimer = null;
+            
+            // Clean up function
+            function cleanup() {
+                if (captureTimer) {
+                    clearInterval(captureTimer);
+                }
+                if (videoEl.srcObject) {
+                    const stream = videoEl.srcObject;
+                    const tracks = stream.getTracks();
+                    tracks.forEach(track => track.stop());
+                }
+            }
+            
+            backBtn.addEventListener('click', function() {
+                cleanup();
+                window.location.href = '/';
+            });
+            
+            // Initialize camera and start capture process
+            initCamera();
+            
+            function initCamera() {
+                statusMessage.textContent = 'Initializing camera...';
+                
+                navigator.mediaDevices.getUserMedia({ video: true })
+                    .then(stream => {
+                        videoEl.srcObject = stream;
+                        statusMessage.textContent = 'Camera ready. Starting face recognition...';
+                        
+                        // Start recognition process after a short delay
+                        setTimeout(startRecognitionProcess, 1000);
+                    })
+                    .catch(err => {
+                        statusMessage.textContent = 'Error accessing camera: ' + err.message;
+                        statusMessage.style.color = 'red';
+                    });
+            }
+            
+            function startRecognitionProcess() {
+                captureCount = 0;
+                progressBar.style.width = '0%';
+                
+                captureTimer = setInterval(() => {
+                    captureCount++;
+                    const progressPercent = (captureCount / totalCaptures) * 100;
+                    progressBar.style.width = `${progressPercent}%`;
+                    
+                    statusMessage.textContent = `Attempting recognition... ${captureCount}/${totalCaptures}`;
+                    
+                    // Capture and recognize face
+                    captureAndRecognizeFace();
+                    
+                    if (captureCount >= totalCaptures) {
+                        clearInterval(captureTimer);
+                        statusMessage.textContent = 'Max attempts reached. Face not recognized.';
+                        statusMessage.style.color = 'red';
+                        
+                        // Redirect after a delay
+                        setTimeout(() => {
+                            cleanup();
+                            window.location.href = '/';
+                        }, 3000);
+                    }
+                }, 1000);
+            }
+            
+            function captureAndRecognizeFace() {
+                // Draw the current video frame to canvas
+                const ctx = canvasEl.getContext('2d');
+                ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+                
+                // Convert canvas to blob and send to server
+                canvasEl.toBlob(function(blob) {
+                    const formData = new FormData();
+                    formData.append("face_image", blob);
+                    formData.append("recognition", "true");
+                    
+                    fetch("/recognize-face", {
+                        method: "POST",
+                        body: formData,
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.recognizedUser) {
+                            // Successfully recognized
+                            clearInterval(captureTimer);
+                            
+                            statusMessage.textContent = 'Face recognized!';
+                            statusMessage.style.color = 'green';
+                            
+                            // Record attendance
+                            markAttendance(data.recognizedUser);
+                        } else {
+                            // Continue trying - the interval will handle the next attempt
+                            console.log("Recognition attempt failed, continuing...");
+                        }
+                    })
+                    .catch(error => {
+                        console.error("Error during recognition:", error);
+                        // Continue trying - the interval will handle the next attempt
+                    });
+                }, "image/jpeg", 0.9);
+            }
+            
+            function markAttendance(userName) {
+                statusMessage.textContent = 'Recording attendance...';
+                
+                fetch('/attendance', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        UserID: userName,
+                        date: new Date().toISOString()
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        if (response.status === 409) {
+                            throw new Error('Attendance already recorded for today');
+                        }
+                        throw new Error('Error recording attendance');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    statusMessage.textContent = 'Attendance recorded successfully!';
+                    statusMessage.style.color = 'green';
+                    
+                    recognizedUser.textContent = `Welcome, ${userName}!`;
+                    recognizedUser.style.display = 'block';
+                    
+                    // Clean up and redirect after 3 seconds
+                    setTimeout(() => {
+                        cleanup();
+                        window.location.href = '/';
+                    }, 3000);
+                })
+                .catch(error => {
+                    statusMessage.textContent = error.message;
+                    statusMessage.style.color = 'red';
+                    
+                    // Clean up and redirect after 3 seconds
+                    setTimeout(() => {
+                        cleanup();
+                        window.location.href = '/';
+                    }, 3000);
+                });
+            }
+        });
+    </script>
+</body>
+</html>

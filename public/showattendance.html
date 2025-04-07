@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attendance Records - Attendance System</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .attendance-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .attendance-table th, .attendance-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+
+        .attendance-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+
+        .attendance-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .results-container {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .no-records {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .export-btn {
+            margin-top: 15px;
+            padding: 8px 15px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .export-btn:hover {
+            background-color: #3367d6;
+        }
+        
+        .export-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Attendance Records</h1>
+        
+        <button id="back-btn" class="back-btn">← Back to Home</button>
+        
+        <div class="form-container">
+            <div class="input-group">
+                <label for="user-select">Select User:</label>
+                <select id="user-select">
+                    <option value="all">All Users</option>
+                    <!-- User options will be loaded dynamically -->
+                </select>
+            </div>
+            
+            <div class="input-group">
+                <label for="date-input">Select Date:</label>
+                <input type="date" id="date-input">
+            </div>
+            
+            <button id="fetch-btn" class="action-btn">Fetch Attendance</button>
+        </div>
+        
+        <div class="results-container">
+            <div id="table-container">
+                <table class="attendance-table">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Date</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="attendance-data">
+                        <!-- Attendance data will be loaded dynamically -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <p id="status-message" class="status-message"></p>
+            
+            <button id="export-btn" class="export-btn" disabled>Export to CSV</button>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get references to DOM elements
+            const backBtn = document.getElementById('back-btn');
+            const userSelect = document.getElementById('user-select');
+            const dateInput = document.getElementById('date-input');
+            const fetchBtn = document.getElementById('fetch-btn');
+            const tableContainer = document.getElementById('table-container');
+            const attendanceTable = document.getElementById('attendance-data');
+            const statusMessage = document.getElementById('status-message');
+            const exportBtn = document.getElementById('export-btn');
+            
+            // Current records for export
+            let currentRecords = [];
+            
+            // Set default date to today
+            dateInput.value = new Date().toISOString().split('T')[0];
+            
+            // Back button event listener
+            backBtn.addEventListener('click', function() {
+                window.location.href = '/';
+            });
+            
+            // Load users from API
+            loadUsers();
+            
+            // Fetch button event listener
+            fetchBtn.addEventListener('click', function() {
+                fetchAttendance();
+            });
+            
+            // Export button event listener
+            exportBtn.addEventListener('click', function() {
+                exportToCSV();
+            });
+            
+            function loadUsers() {
+                statusMessage.textContent = 'Loading users...';
+                
+                fetch('/api/users')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Error loading users');
+                        }
+                        return response.json();
+                    })
+                    .then(users => {
+                        // Clear any existing options except "All Users"
+                        while (userSelect.options.length > 1) {
+                            userSelect.remove(1);
+                        }
+                        
+                        // Add users to select dropdown
+                        users.forEach(user => {
+                            const option = document.createElement('option');
+                            option.value = user.name; // Use name as the value
+                            option.textContent = user.name;
+                            userSelect.appendChild(option);
+                        });
+                        
+                        statusMessage.textContent = `Loaded ${users.length} users`;
+                        statusMessage.style.color = 'green';
+                        
+                        // Fetch attendance for today
+                        fetchAttendance();
+                    })
+                    .catch(error => {
+                        statusMessage.textContent = 'Error loading users: ' + error.message;
+                        statusMessage.style.color = 'red';
+                    });
+            }
+            
+            function fetchAttendance() {
+                const selectedDate = dateInput.value;
+                const selectedUser = userSelect.value;
+                
+                if (!selectedDate) {
+                    statusMessage.textContent = 'Please select a date';
+                    statusMessage.style.color = 'red';
+                    return;
+                }
+                
+                statusMessage.textContent = 'Fetching attendance records...';
+                statusMessage.style.color = 'blue';
+                
+                // Clear existing table rows
+                while (attendanceTable.firstChild) {
+                    attendanceTable.removeChild(attendanceTable.firstChild);
+                }
+                
+                fetch(`/attendance/${selectedDate}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Error fetching attendance records');
+                        }
+                        return response.json();
+                    })
+                    .then(records => {
+                        // Store the records for export
+                        currentRecords = records;
+                        
+                        if (records.length === 0) {
+                            displayNoRecordsMessage();
+                            return;
+                        }
+                        
+                        // Filter by user if needed
+                        const filteredRecords = selectedUser === 'all' 
+                            ? records 
+                            : records.filter(record => record.UserID === selectedUser);
+                        
+                        if (filteredRecords.length === 0) {
+                            displayNoRecordsMessage(true);
+                            return;
+                        }
+                        
+                        // Populate table
+                        filteredRecords.forEach(record => {
+                            const row = document.createElement('tr');
+                            
+                            // User name cell
+                            const nameCell = document.createElement('td');
+                            nameCell.textContent = record.UserID;
+                            row.appendChild(nameCell);
+                            
+                            // Date cell
+                            const dateCell = document.createElement('td');
+                            const dateObj = new Date(record.Date);
+                            dateCell.textContent = dateObj.toLocaleDateString();
+                            row.appendChild(dateCell);
+                            
+                            // Time cell
+                            const timeCell = document.createElement('td');
+                            timeCell.textContent = dateObj.toLocaleTimeString();
+                            row.appendChild(timeCell);
+                            
+                            attendanceTable.appendChild(row);
+                        });
+                        
+                        statusMessage.textContent = `Found ${filteredRecords.length} attendance records`;
+                        statusMessage.style.color = 'green';
+                        
+                        // Enable export button if there are records
+                        exportBtn.disabled = false;
+                    })
+                    .catch(error => {
+                        statusMessage.textContent = 'Error: ' + error.message;
+                        statusMessage.style.color = 'red';
+                        exportBtn.disabled = true;
+                    });
+            }
+            
+            function displayNoRecordsMessage(isFiltered = false) {
+                const message = isFiltered 
+                    ? 'No attendance records found for selected user and date' 
+                    : 'No attendance records found for this date';
+                    
+                statusMessage.textContent = message;
+                statusMessage.style.color = 'orange';
+                
+                // Display a message in the table
+                const row = document.createElement('tr');
+                const cell = document.createElement('td');
+                cell.colSpan = 3;
+                cell.className = 'no-records';
+                cell.textContent = message;
+                row.appendChild(cell);
+                attendanceTable.appendChild(row);
+                
+                // Disable export button
+                exportBtn.disabled = true;
+            }
+            
+            function exportToCSV() {
+                if (currentRecords.length === 0) {
+                    alert('No records to export');
+                    return;
+                }
+                
+                const selectedUser = userSelect.value;
+                
+                // Filter records if a specific user is selected
+                const recordsToExport = selectedUser === 'all' 
+                    ? currentRecords 
+                    : currentRecords.filter(record => record.UserID === selectedUser);
+                
+                if (recordsToExport.length === 0) {
+                    alert('No records to export for the selected filter');
+                    return;
+                }
+                
+                // Create CSV content
+                let csvContent = 'User,Date,Time\n';
+                
+                recordsToExport.forEach(record => {
+                    const dateObj = new Date(record.Date);
+                    const date = dateObj.toLocaleDateString();
+                    const time = dateObj.toLocaleTimeString();
+                    
+                    // Escape commas in user names if needed
+                    const username = record.UserID.includes(',') 
+                        ? `"${record.UserID}"` 
+                        : record.UserID;
+                    
+                    csvContent += `${username},${date},${time}\n`;
+                });
+                
+                // Create a blob and download link
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                
+                // Set the file name to include the date
+                const dateStr = dateInput.value;
+                const fileName = selectedUser === 'all' 
+                    ? `attendance_${dateStr}.csv` 
+                    : `attendance_${selectedUser}_${dateStr}.csv`;
+                
+                link.setAttribute('href', url);
+                link.setAttribute('download', fileName);
+                link.style.visibility = 'hidden';
+                
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        });
+    </script>
+</body>
+</html>

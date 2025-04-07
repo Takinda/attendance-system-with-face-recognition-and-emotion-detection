@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add User - Attendance System</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Add New User</h1>
+        
+        <button id="back-btn" class="back-btn">← Back to Home</button>
+        
+        <div class="form-container">
+            <div class="input-group">
+                <label for="username">Enter your name:</label>
+                <input type="text" id="username" placeholder="Your name" required>
+            </div>
+            
+            <p id="status-message" class="status-message"></p>
+            
+            <button id="check-btn" class="action-btn">Check Username</button>
+            
+            <div id="camera-section" class="camera-section" style="display: none;">
+                <video id="video" width="640" height="480" autoplay></video>
+                <canvas id="canvas" width="640" height="480" style="display: none;"></canvas>
+                <button id="capture-btn" class="action-btn" disabled>Capture Image</button>
+                <p id="capture-counter" class="counter">Images captured: 0/5</p>
+                <button id="finish-btn" class="action-btn" style="display: none;">Complete Registration</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+    // Get references to DOM elements
+    const backBtn = document.getElementById("back-btn");
+    const usernameInput = document.getElementById("username");
+    const statusMessage = document.getElementById("status-message");
+    const checkBtn = document.getElementById("check-btn");
+    const cameraSection = document.getElementById("camera-section");
+    const videoEl = document.getElementById("video");
+    const canvasEl = document.getElementById("canvas");
+    const captureBtn = document.getElementById("capture-btn");
+    const captureCounter = document.getElementById("capture-counter");
+    const finishBtn = document.getElementById("finish-btn");
+
+    let captureCount = 0;
+    const requiredCaptures = 5;
+
+    // Go back to home page
+    backBtn.addEventListener("click", function () {
+        window.location.href = "/";
+    });
+
+    // Check username availability
+    checkBtn.addEventListener("click", async function () {
+        const username = usernameInput.value.trim();
+        if (!username) {
+            statusMessage.textContent = "Please enter a valid name.";
+            statusMessage.style.color = "red";
+            return;
+        }
+
+        statusMessage.textContent = "Checking username...";
+        statusMessage.style.color = "blue";
+
+        try {
+            const response = await fetch("/api/users");
+            const users = await response.json();
+            const exists = users.some((user) => user.name.toLowerCase() === username.toLowerCase());
+
+            if (exists) {
+                statusMessage.textContent = "This username already exists. Please choose another.";
+                statusMessage.style.color = "red";
+            } else {
+                statusMessage.textContent = "Username available! You can now capture your face images.";
+                statusMessage.style.color = "green";
+
+                cameraSection.style.display = "block";
+                checkBtn.style.display = "none";
+                usernameInput.disabled = true;
+
+                initCamera();
+            }
+        } catch (error) {
+            statusMessage.textContent = "Error checking username. Please try again.";
+            statusMessage.style.color = "red";
+            console.error("Error:", error);
+        }
+    });
+
+    // Initialize camera
+    function initCamera() {
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then((stream) => {
+                videoEl.srcObject = stream;
+                captureBtn.disabled = false;
+            })
+            .catch((err) => {
+                statusMessage.textContent = "Error accessing camera: " + err.message;
+                statusMessage.style.color = "red";
+            });
+    }
+
+    // Capture image and send to backend
+    captureBtn.addEventListener("click", function () {
+        const username = usernameInput.value.trim();
+        const ctx = canvasEl.getContext("2d");
+        ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+
+        canvasEl.toBlob(function (blob) {
+            const formData = new FormData();
+            formData.append("user_id", username);
+            formData.append("face_image", blob, `face_${username}_${Date.now()}.jpg`);
+
+            fetch("/upload", {
+                method: "POST",
+                body: formData,
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    captureCount++;
+                    captureCounter.textContent = `Images captured: ${captureCount}/${requiredCaptures}`;
+                    statusMessage.textContent = "Image captured successfully!";
+                    statusMessage.style.color = "green";
+
+                    if (captureCount >= requiredCaptures) {
+                        captureBtn.disabled = true;
+                        finishBtn.style.display = "block";
+                        statusMessage.textContent = "Face captured successfully! Click 'Complete Registration' to finish.";
+                    }
+                } else {
+                    // Gracefully handle upload failure and continue the process
+                    console.warn('Failed to upload image, but continuing...');
+                    captureCount++;  // Count the attempt
+                    captureCounter.textContent = `Images captured: ${captureCount}/${requiredCaptures}`;
+                    statusMessage.textContent = "Image capture failed, but continuing...";
+                    statusMessage.style.color = "orange"; // Display a warning color
+                }
+            })
+            .catch(error => {
+                // Ignore the error and continue
+                console.warn("Error uploading image, but continuing:", error);
+                captureCount++;  // Count the attempt
+                captureCounter.textContent = `Images captured: ${captureCount}/${requiredCaptures}`;
+                statusMessage.textContent = "Image upload failed, but continuing...";
+                statusMessage.style.color = "orange"; // Display a warning color
+            });
+        }, "image/jpeg", 0.9);
+    });
+
+    // Complete registration
+    finishBtn.addEventListener("click", function () {
+        const username = usernameInput.value.trim();
+
+        fetch("/", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ name: username }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            statusMessage.textContent = "Registration completed successfully! Redirecting to home page...";
+            statusMessage.style.color = "green";
+
+            // Stop camera stream
+            const stream = videoEl.srcObject;
+            stream.getTracks().forEach((track) => track.stop());
+
+            setTimeout(() => {
+                window.location.href = "/";
+            }, 3000);
+        })
+        .catch(error => {
+            statusMessage.textContent = "Error creating user: " + error.message;
+            statusMessage.style.color = "red";
+        });
+    });
+});
+
+    </script>
+    
+</body>
+</html>
