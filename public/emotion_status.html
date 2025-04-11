@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emotion Detection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .btn {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .btn:hover {
+            background-color: #45a049;
+        }
+        
+        .btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .video-container {
+            width: 100%;
+            max-width: 640px;
+            margin-top: 20px;
+            display: none;
+            position: relative;
+        }
+        
+        video {
+            width: 100%;
+            border-radius: 8px;
+            border: 2px solid #ddd;
+        }
+        
+        canvas {
+            display: none;
+        }
+        
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .emotion-display {
+            font-size: 28px;
+            font-weight: bold;
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: #f0f8ff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        
+        .status-message {
+            color: #555;
+            margin-top: 10px;
+        }
+        
+        .emotion-angry { color: #e53935; background-color: #ffebee; }
+        .emotion-disgust { color: #8bc34a; background-color: #f1f8e9; }
+        .emotion-fear { color: #7b1fa2; background-color: #f3e5f5; }
+        .emotion-happy { color: #ffc107; background-color: #fffde7; }
+        .emotion-sad { color: #3f51b5; background-color: #e8eaf6; }
+        .emotion-surprise { color: #ff9800; background-color: #fff3e0; }
+        .emotion-neutral { color: #607d8b; background-color: #eceff1; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Emotion Detection</h1>
+        
+        <p class="status-message" id="status-message">Click the button below to start emotion detection</p>
+        
+        <button id="start-btn" class="btn">Start Detection</button>
+        
+        <div class="emotion-display" id="emotion-display">Waiting for detection...</div>
+        
+        <div class="video-container" id="video-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+            
+            <div class="controls">
+                <button id="stop-btn" class="btn">Stop Detection</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const startBtn = document.getElementById('start-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            const videoEl = document.getElementById('video');
+            const canvasEl = document.getElementById('canvas');
+            const videoContainer = document.getElementById('video-container');
+            const statusMessage = document.getElementById('status-message');
+            const emotionDisplay = document.getElementById('emotion-display');
+            
+            let stream = null;
+            let isRunning = false;
+            let emotionUpdateInterval = null;
+            const emotionClasses = ['Surprise', 'Disgust', 'Fear', 'Happy', 'Sad', 'Angry', 'Neutral'];
+            
+            // Function to start camera and emotion detection
+            async function startDetection() {
+                try {
+                    // Request camera access
+                    stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: true,
+                        audio: false
+                    });
+                    
+                    // Display the video stream
+                    videoEl.srcObject = stream;
+                    videoContainer.style.display = 'block';
+                    startBtn.disabled = true;
+                    statusMessage.textContent = 'Camera is active. Detecting emotions...';
+                    statusMessage.style.color = 'green';
+                    
+                    // Set up canvas dimensions
+                    canvasEl.width = videoEl.videoWidth;
+                    canvasEl.height = videoEl.videoHeight;
+                    
+                    // Start the emotion detection
+                    isRunning = true;
+                    
+                    // Start emotion detection interval (every 5 seconds)
+                    emotionUpdateInterval = setInterval(detectEmotion, 5000);
+                    
+                    // Run the first detection
+                    detectEmotion();
+                    
+                } catch (error) {
+                    console.error('Error accessing camera:', error);
+                    statusMessage.textContent = 'Error accessing camera: ' + error.message;
+                    statusMessage.style.color = 'red';
+                }
+            }
+            
+            // Function to stop camera and detection
+            function stopDetection() {
+                if (stream) {
+                    const tracks = stream.getTracks();
+                    tracks.forEach(track => track.stop());
+                    videoEl.srcObject = null;
+                    stream = null;
+                }
+                
+                if (emotionUpdateInterval) {
+                    clearInterval(emotionUpdateInterval);
+                    emotionUpdateInterval = null;
+                }
+                
+                isRunning = false;
+                videoContainer.style.display = 'none';
+                startBtn.disabled = false;
+                statusMessage.textContent = 'Emotion detection stopped';
+                statusMessage.style.color = '#555';
+                emotionDisplay.textContent = 'Waiting for detection...';
+                emotionDisplay.className = 'emotion-display';
+            }
+            
+            // Function to capture frame and send for emotion detection
+            async function detectEmotion() {
+                if (!isRunning || !videoEl.videoWidth) return;
+                
+                // Make sure canvas is properly sized
+                if (canvasEl.width !== videoEl.videoWidth) {
+                    canvasEl.width = videoEl.videoWidth;
+                    canvasEl.height = videoEl.videoHeight;
+                }
+                
+                const ctx = canvasEl.getContext('2d');
+                ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+                
+                // Convert to blob
+                canvasEl.toBlob(async function(blob) {
+                    try {
+                        const formData = new FormData();
+                        formData.append('image', blob, 'emotion.jpg');
+                        
+                        // Send to server
+                        const response = await fetch('/detect-emotion', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error('Error from server: ' + response.statusText);
+                        }
+                        
+                        const result = await response.json();
+                        
+                        if (result.success && result.emotion !== undefined) {
+                            // Update the emotion display
+                            const detectedEmotion = emotionClasses[result.emotion];
+                            emotionDisplay.textContent = detectedEmotion;
+                            
+                            // Reset all classes
+                            emotionDisplay.className = 'emotion-display';
+                            
+                            // Add emotion-specific class
+                            emotionDisplay.classList.add('emotion-' + detectedEmotion.toLowerCase());
+                            
+                            console.log('Detected emotion:', detectedEmotion);
+                        } else {
+                            console.error('Invalid response from server:', result);
+                        }
+                    } catch (error) {
+                        console.error('Error detecting emotion:', error);
+                        statusMessage.textContent = 'Error: ' + error.message;
+                        statusMessage.style.color = 'red';
+                    }
+                }, 'image/jpeg', 0.9);
+            }
+            
+            // Event listeners
+            startBtn.addEventListener('click', startDetection);
+            stopBtn.addEventListener('click', stopDetection);
+            
+            // Handle video loaded event to set canvas dimensions
+            videoEl.addEventListener('loadedmetadata', function() {
+                canvasEl.width = videoEl.videoWidth;
+                canvasEl.height = videoEl.videoHeight;
+            });
+            
+            // Clean up on page unload
+            window.addEventListener('beforeunload', function() {
+                if (emotionUpdateInterval) {
+                    clearInterval(emotionUpdateInterval);
+                }
+                
+                if (stream) {
+                    const tracks = stream.getTracks();
+                    tracks.forEach(track => track.stop());
+                }
+            });
+        });
+    </script>
+</body>
+</html>

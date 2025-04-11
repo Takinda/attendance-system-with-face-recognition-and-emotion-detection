@@ -55,6 +55,11 @@ app.get("/records", (req, res) => {
     res.sendFile(__dirname + "/public/records.html");
 });
 
+// Serve the emotion detection page
+app.get("/emotion", (req, res) => {
+    res.sendFile(__dirname + "/public/emotion.html");
+});
+
 // API endpoint to get all users
 app.get("/api/users", async (req, res) => {
     try {
@@ -80,7 +85,7 @@ app.post("/", async(req, res) => {
     }
 });
 
-// Create an attendance record with duplication prevention
+// Create an attendance record
 app.post("/attendance", async(req, res) => {
     const { UserID, date } = req.body;
     
@@ -172,11 +177,19 @@ app.get("/attendance/:date", async(req, res) => {
     }
 });
 
-// Temporary storage for images
+// Storage for images
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         // If it's a recognition request, store in a temp directory
         if (req.body && req.body.recognition === "true") {
+            const tempDir = path.join("temp_images");
+            // Ensure directory exists
+            if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true });
+            }
+            cb(null, tempDir);
+        } else if (req.url && req.url.includes('detect-emotion')) {
+            // For emotion detection
             const tempDir = path.join("temp_images");
             // Ensure directory exists
             if (!fs.existsSync(tempDir)) {
@@ -204,11 +217,95 @@ const storage = multer.diskStorage({
     filename: (req, file, cb) => {
         const timestamp = Date.now();
         const ext = path.extname(file.originalname || 'unknown.jpg');
-        cb(null, `face_image_${timestamp}${ext}`);
+        cb(null, `image_${timestamp}${ext}`);
     }
 });
 
 const upload = multer({ storage });
+
+// Emotion detection endpoint
+app.post("/detect-emotion", upload.single("image"), (req, res) => {
+    if (!req.file) {
+        console.error("No image file received for emotion detection");
+        return res.status(400).json({ success: false, error: "No image uploaded" });
+    }
+    
+    const imagePath = req.file.path;
+    console.log(`Processing image for emotion detection: ${imagePath}`);
+    
+    // Call the emotion detection python script
+    const pythonProcess = spawn("python", ["public/emotion_detector.py", imagePath]);
+    
+    let emotionResult = "";
+    let errorOutput = "";
+    
+    pythonProcess.stdout.on("data", (data) => {
+        // Append to the output string
+        emotionResult += data.toString();
+        console.log(`Python emotion detection raw output: "${data.toString()}"`);
+    });
+    
+    pythonProcess.stderr.on("data", (data) => {
+        errorOutput += data.toString();
+        console.error(`Python emotion detection error: ${data}`);
+    });
+    
+    pythonProcess.on("close", (code) => {
+        // Delete the temporary image after processing
+        try {
+            if (fs.existsSync(imagePath)) {
+                fs.unlinkSync(imagePath);
+                console.log(`Deleted temporary image: ${imagePath}`);
+            }
+        } catch (err) {
+            console.error(`Error deleting temporary image: ${err}`);
+        }
+        
+        // Extract just the last line which should contain the emotion index
+        const lines = emotionResult.trim().split('\n');
+        const lastLine = lines[lines.length - 1].trim();
+        console.log(`Last line of output: "${lastLine}"`);
+        
+        if (code === 0 && lastLine !== "" && lastLine !== "-1") {
+            try {
+                // Convert string result to number
+                const emotionIndex = parseInt(lastLine, 10);
+                console.log(`Parsed emotion index: ${emotionIndex}`);
+                
+                if (!isNaN(emotionIndex) && emotionIndex >= 0 && emotionIndex <= 6) {
+                    res.json({ 
+                        success: true, 
+                        emotion: emotionIndex
+                    });
+                } else {
+                    console.log(`Invalid emotion index: ${emotionIndex}`);
+                    res.json({ 
+                        success: false, 
+                        message: "Invalid emotion index returned", 
+                        error: `Invalid index: ${emotionIndex}`
+                    });
+                }
+            } catch (err) {
+                console.error(`Error parsing emotion index: ${err}`);
+                res.json({ 
+                    success: false, 
+                    message: "Error parsing emotion result", 
+                    error: err.message
+                });
+            }
+        } else {
+            console.log("Emotion detection failed");
+            if (errorOutput) {
+                console.error(`Error details: ${errorOutput}`);
+            }
+            res.json({ 
+                success: false, 
+                message: "Failed to detect emotion", 
+                error: errorOutput 
+            });
+        }
+    });
+});
 
 // Directly recognize a face image
 app.post("/recognize-face", upload.single("face_image"), (req, res) => {
@@ -220,14 +317,15 @@ app.post("/recognize-face", upload.single("face_image"), (req, res) => {
     const imagePath = req.file.path;
     console.log(`Processing image for face recognition: ${imagePath}`);
     
-    // Call face_rec.py to process the image (use 'python' or 'python3' as appropriate for your system)
-    const pythonProcess = spawn("python", ["public/face_rec.py", imagePath]);
+    // Call face_rec.py to process the image
+    const pythonProcess = spawn("python", ["face_rec.py", imagePath]);
     
     let recognizedUser = "";
     let errorOutput = "";
     
     pythonProcess.stdout.on("data", (data) => {
         recognizedUser += data.toString().trim();
+        console.log(`Python recognition output: ${recognizedUser}`);
     });
     
     pythonProcess.stderr.on("data", (data) => {
@@ -251,142 +349,141 @@ app.post("/recognize-face", upload.single("face_image"), (req, res) => {
             
             // Check if user already has attendance for today before responding
             checkTodayAttendance(recognizedUser)
-                .then(hasAttendance => {
-                    if (hasAttendance) {
-                        console.log(`User ${recognizedUser} already has attendance for today`);
-                        res.json({ 
-                            success: true, 
-                            recognizedUser: recognizedUser,
-                            attendanceRecorded: false,
-                            message: "Attendance already recorded for today"
-                        });
-                    } else {
-                        res.json({ 
-                            success: true, 
-                            recognizedUser: recognizedUser,
-                            attendanceRecorded: true
-                        });
-                    }
-                })
-                .catch(err => {
-                    console.error(`Error checking attendance: ${err}`);
+                .then(hasAttendance => {if (hasAttendance) {
+                    console.log(`User ${recognizedUser} already has attendance for today`);
                     res.json({ 
                         success: true, 
-                        recognizedUser: recognizedUser 
+                        recognizedUser: recognizedUser,
+                        attendanceRecorded: false,
+                        message: "Attendance already recorded for today"
                     });
+                } else {
+                    res.json({ 
+                        success: true, 
+                        recognizedUser: recognizedUser,
+                        attendanceRecorded: true
+                    });
+                }
+            })
+            .catch(err => {
+                console.error(`Error checking attendance: ${err}`);
+                res.json({ 
+                    success: true, 
+                    recognizedUser: recognizedUser 
                 });
-        } else {
-            console.log("Face recognition failed or unknown face detected");
-            if (errorOutput) {
-                console.error(`Error details: ${errorOutput}`);
-            }
-            res.json({ 
-                success: false, 
-                message: "Face not recognized", 
-                error: errorOutput 
             });
+    } else {
+        console.log("Face recognition failed or unknown face detected");
+        if (errorOutput) {
+            console.error(`Error details: ${errorOutput}`);
         }
-    });
+        res.json({ 
+            success: false, 
+            message: "Face not recognized", 
+            error: errorOutput 
+        });
+    }
+});
 });
 
 // Helper function to check if a user already has attendance for today
 async function checkTodayAttendance(userId) {
-    try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        
-        const existingAttendance = await Attendance.findOne({ 
-            UserID: userId, 
-            Date: { 
-                $gte: today, 
-                $lt: tomorrow 
-            } 
-        });
-        
-        return existingAttendance !== null;
-    } catch (error) {
-        console.error(`Error checking today's attendance: ${error}`);
-        return false;
-    }
+try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const existingAttendance = await Attendance.findOne({ 
+        UserID: userId, 
+        Date: { 
+            $gte: today, 
+            $lt: tomorrow 
+        } 
+    });
+    
+    return existingAttendance !== null;
+} catch (error) {
+    console.error(`Error checking today's attendance: ${error}`);
+    return false;
+}
 }
 
-// Original upload endpoint for user registration Python recognition error
+// Original upload endpoint for user registration
 app.post("/upload", upload.single("face_image"), async (req, res) => {
-    // Check if the file is received
-    if (!req.file) {
-        console.error("No file received");
-        return res.status(400).json({ error: "No file uploaded" });
-    }
-    
-    const { user_id } = req.body;
-    const imagePath = req.file.path;
-    
-    console.log(`Received image for user ${user_id}: ${imagePath}`);
-    
-    if (!user_id) {
-        // Delete the file if no user_id
-        try {
-            if (fs.existsSync(imagePath)) {
-                fs.unlinkSync(imagePath);
-            }
-        } catch (err) {
-            console.error(`Error deleting file: ${err}`);
+// Check if the file is received
+if (!req.file) {
+    console.error("No file received");
+    return res.status(400).json({ error: "No file uploaded" });
+}
+
+const { user_id } = req.body;
+const imagePath = req.file.path;
+
+console.log(`Received image for user ${user_id}: ${imagePath}`);
+
+if (!user_id) {
+    // Delete the file if no user_id
+    try {
+        if (fs.existsSync(imagePath)) {
+            fs.unlinkSync(imagePath);
         }
-        return res.status(400).json({ error: "Missing user ID" });
+    } catch (err) {
+        console.error(`Error deleting file: ${err}`);
     }
+    return res.status(400).json({ error: "Missing user ID" });
+}
+
+// Ensure the folder structure is correct
+const userFolder = path.join("user_images", user_id);
+console.log("Checking user folder:", userFolder);
+
+// Check the contents of the folder to confirm the images are uploaded
+const uploadedFiles = fs.readdirSync(userFolder).filter(file => file.endsWith(".jpg"));
+console.log(`Uploaded files count: ${uploadedFiles.length}`);
+
+if (uploadedFiles.length >= 5) {
+    // Call the Python script to process the 5 images
+    const pythonProcess = spawn("python", ["process_image.py", userFolder, user_id]);
     
-    // Ensure the folder structure is correct
-    const userFolder = path.join("user_images", user_id);
-    console.log("Checking user folder:", userFolder);
+    pythonProcess.stdout.on("data", (data) => {
+        console.log(`Python Output: ${data}`);
+    });
     
-    // Check the contents of the folder to confirm the images are uploaded
-    const uploadedFiles = fs.readdirSync(userFolder).filter(file => file.endsWith(".jpg"));
-    console.log(`Uploaded files count: ${uploadedFiles.length}`);
+    pythonProcess.stderr.on("data", (data) => {
+        console.error(`Python Error: ${data}`);
+    });
     
-    if (uploadedFiles.length >= 5) {
-        // Call the Python script to process the 5 images
-        const pythonProcess = spawn("python", ["process_image.py", userFolder, user_id]);
-        
-        pythonProcess.stdout.on("data", (data) => {
-            console.log(`Python Output: ${data}`);
-        });
-        
-        pythonProcess.stderr.on("data", (data) => {
-            console.error(`Python Error: ${data}`);
-        });
-        
-        pythonProcess.on("close", async (code) => {
-            if (code === 0) {
-                // Create the new user in the database after processing the images
-                try {
-                    // Check if user already exists
-                    let newUser = await Users.findOne({ name: user_id });
-                    if (!newUser) {
-                        newUser = await Users.create({ name: user_id });
-                        await newUser.save();
-                        console.log("User added to the database:", newUser);
-                    } else {
-                        console.log("User already exists:", newUser);
-                    }
-                    
-                    // Respond with success
-                    res.json({ success: true, message: "Face processed, registration completed, and user added to the database" });
-                } catch (err) {
-                    console.error("Error adding user to database:", err);
-                    res.status(500).json({ error: "Error adding user to database" });
+    pythonProcess.on("close", async (code) => {
+        if (code === 0) {
+            // Create the new user in the database after processing the images
+            try {
+                // Check if user already exists
+                let newUser = await Users.findOne({ name: user_id });
+                if (!newUser) {
+                    newUser = await Users.create({ name: user_id });
+                    await newUser.save();
+                    console.log("User added to the database:", newUser);
+                } else {
+                    console.log("User already exists:", newUser);
                 }
-            } else {
-                res.status(500).json({ error: "Face processing failed" });
+                
+                // Respond with success emotion_detector
+                res.json({ success: true, message: "Face processed, registration completed, and user added to the database" });
+            } catch (err) {
+                console.error("Error adding user to database:", err);
+                res.status(500).json({ error: "Error adding user to database" });
             }
-        });
-    } else {
-        res.json({ success: true, message: `Image uploaded. ${uploadedFiles.length}/5 images captured.` });
-    }
+        } else {
+            res.status(500).json({ error: "Face processing failed" });
+        }
+    });
+} else {
+    res.json({ success: true, message: `Image uploaded. ${uploadedFiles.length}/5 images captured.` });
+}
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server is running on http://127.0.0.1:${PORT}`);
+console.log(`Server is running on http://127.0.0.1:${PORT}`);
 });
