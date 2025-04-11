@@ -1,5 +1,5 @@
 # Face Recognition and Emotion Detection Installation
-##this project was made as graduation project in **Computer Engineering Department - University of technology** in Baghdad - Iraq
+## this project was made as graduation project in **Computer Engineering Department - University of technology** in Baghdad - Iraq
 
 
 
